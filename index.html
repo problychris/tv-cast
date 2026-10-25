@@ -13,7 +13,8 @@ html,body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.4 system-ui
 main{max-width:760px;margin:0 auto;padding:16px 16px 48px}
 header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
 header h1{font-size:22px;margin:0;flex:1}
-google-cast-launcher{width:44px;height:44px;display:block;cursor:pointer;--disconnected-color:#eef0f4;--connected-color:#2b6cff}
+#bConnect{min-width:150px;font-weight:600}
+#bConnect.on{background:var(--ok);border-color:var(--ok)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:14px}
 label{display:block;font-size:13px;color:var(--mut);margin-bottom:6px}
 .row{display:flex;gap:8px;align-items:center}
@@ -62,7 +63,7 @@ video{width:100%;border-radius:10px;background:#000;margin-top:12px;display:none
 <main>
 <header>
   <h1>TV-Cast</h1>
-  <google-cast-launcher title="Mit Fernseher verbinden"></google-cast-launcher>
+  <button class="pri" id="bConnect" title="Mit Fernseher verbinden">📺 TV verbinden</button>
 </header>
 
 <div class="banner" id="banner"></div>
@@ -87,7 +88,7 @@ video{width:100%;border-radius:10px;background:#000;margin-top:12px;display:none
     <button id="bLocal" title="Auf diesem Gerät testen">Hier testen</button>
   </div>
   <div id="status">Lade Cast…</div>
-  <video id="vLocal" controls playsinline></video>
+  <video id="vLocal" controls playsinline x-webkit-airplay="allow"></video>
 </section>
 
 <section class="card off" id="remote">
@@ -199,7 +200,7 @@ video{width:100%;border-radius:10px;background:#000;margin-top:12px;display:none
   /* ---------- Cast ---------- */
   window.__onGCastApiAvailable = function (ok) {
     if (!ok || !window.cast || !cast.framework) {
-      status('Cast ist in diesem Browser nicht verfügbar. Bitte Chrome (Android oder PC) verwenden.', 'err');
+      noCast();
       return;
     }
     ctx = cast.framework.CastContext.getInstance();
@@ -215,13 +216,57 @@ video{width:100%;border-radius:10px;background:#000;margin-top:12px;display:none
       var S = cast.framework.SessionState;
       if (e.sessionState === S.SESSION_RESUMED && pendingAuto) { pendingAuto = false; doLoad(); }
       render();
+      updateConnect();
     });
     castState(ctx.getCastState());
     render();
+    updateConnect();
     if (pendingAuto && ctx.getCurrentSession()) { pendingAuto = false; doLoad(); }
   };
 
+  var airplay = !!window.WebKitPlaybackTargetAvailabilityEvent, castFailed = false;
+  function noCast() {
+    castFailed = true;
+    if (airplay) status('Hier läuft AirPlay statt Chromecast: URL eingeben, „📺 AirPlay“ tippen, Fernseher wählen.');
+    else status('Chromecast geht nur in Chrome am PC oder auf Android. Auf iPad/iPhone: Safari und AirPlay nutzen.', 'err');
+    updateConnect();
+  }
+  function updateConnect() {
+    var b = $('bConnect');
+    b.classList.remove('on');
+    if (ctx) {
+      var st = ctx.getCastState(), C = cast.framework.CastState, s = ctx.getCurrentSession();
+      if (st === C.CONNECTED && s) { b.textContent = '📺 ' + s.getCastDevice().friendlyName + ' ✓'; b.classList.add('on'); }
+      else if (st === C.CONNECTING) b.textContent = '📺 Verbinde…';
+      else b.textContent = '📺 TV verbinden';
+    } else if (airplay && castFailed) b.textContent = '📺 AirPlay';
+    else b.textContent = '📺 TV verbinden';
+  }
+  function airplayNow(play) {
+    var url = $('url').value.trim(), v = $('vLocal');
+    if (!validUrl(url)) { status('Erst die Video-URL eingeben, dann AirPlay.', 'warn'); $('url').focus(); return; }
+    addHist(url, qTitle);
+    v.style.display = 'block';
+    if (v.getAttribute('src') !== url) v.src = url;
+    if (v.webkitShowPlaybackTargetPicker) v.webkitShowPlaybackTargetPicker();
+    if (play) v.play().catch(function () {});
+    status('Im AirPlay-Fenster den Fernseher wählen. Steuerung über den Player unten.', 'ok');
+  }
+  $('bConnect').onclick = function () {
+    if (ctx) {
+      status('Fernseher wählen…');
+      ctx.requestSession().then(function () {
+        var s = ctx.getCurrentSession();
+        if (s) status('Verbunden mit ' + s.getCastDevice().friendlyName + '. Jetzt „Auf TV abspielen“ tippen.', 'ok');
+        updateConnect();
+      }, function (err) { status(err === 'cancel' ? 'Abgebrochen.' : 'Keine Verbindung: ' + err, err === 'cancel' ? '' : 'err'); });
+    } else if (airplay) airplayNow(false);
+    else if (castFailed) noCast();
+    else status('Cast lädt noch, kurz warten.', 'warn');
+  };
+
   function castState(st) {
+    updateConnect();
     var C = cast.framework.CastState;
     if (st === C.NO_DEVICES_AVAILABLE) status('Kein Fernseher gefunden. TV einschalten, gleiches WLAN prüfen.', 'warn');
     else if (st === C.NOT_CONNECTED) status('Fernseher gefunden. URL eingeben und „Auf TV abspielen“ tippen.');
@@ -232,6 +277,7 @@ video{width:100%;border-radius:10px;background:#000;margin-top:12px;display:none
   function castNow() {
     var url = $('url').value.trim();
     if (!validUrl(url)) { status('Bitte eine gültige http(s)-URL eingeben.', 'err'); $('url').focus(); return; }
+    if (!ctx && airplay) { airplayNow(true); return; }
     addHist(url, qTitle);
     if (!ctx) { status('Cast ist noch nicht bereit (nur in Chrome, nur über https).', 'err'); return; }
     if (ctx.getCurrentSession()) { doLoad(); return; }
@@ -308,7 +354,7 @@ video{width:100%;border-radius:10px;background:#000;margin-top:12px;display:none
   $('bCast').onclick = castNow;
   $('url').addEventListener('keydown', function (e) { if (e.key === 'Enter') castNow(); });
   $('url').addEventListener('input', function () { qTitle = ''; });
-  setTimeout(function () { if (!ctx) status('Cast-Bibliothek nicht geladen. Nur Chrome mit Internet und https wird unterstützt.', 'warn'); }, 8000);
+  setTimeout(function () { if (!ctx && !castFailed) noCast(); }, 8000);
   $('bPlay').onclick = function () { if (ctl) ctl.playOrPause(); };
   $('bStop').onclick = function () { if (ctl) ctl.stop(); };
   $('bEnd').onclick = function () { if (ctx) ctx.endCurrentSession(true); };
